@@ -1,0 +1,571 @@
+ORACLE-OGG-KAFKA部署流程
+
+使用组件以及版本、连接列表
+oracle11g
+kafka_2.11-0.10.1.0.tgz
+https://www.apache.org/dyn/closer.cgi?path=/kafka/0.10.1.0/kafka_2.11-0.10.1.0.tgz
+
+zookeeper-3.4.6.tar.gz
+http://apache.fayea.com/zookeeper/zookeeper-3.4.6/
+
+fbo_ggs_Linux_x64_shiphome.zip(OGG-12.2.0.1)
+http://www.oracle.com/technetwork/middleware/goldengate/downloads/index.html
+
+ggs_Adapters_Linux_x64.tar(OGG_BigData_12.2.0.1.1)
+http://www.oracle.com/technetwork/middleware/goldengate/downloads/index.html
+
+一.安装集群前环境准备
+1 root用户进入linux系统
+启动linu使用root用户登录到系统，命令如下：
+
+
+2 关闭防火墙
+2.1 查看防火墙状态
+  使用命令service  iptables  status查看 ，命令如下：
+
+出现上图所示，表示防火墙开启
+2.2 关闭防火墙
+如果步骤2.1得到 Fire is not running说明防火墙关闭，得到一系列信息，说明防火墙开着，
+使用service iptables stop 关闭防火墙，命令如下： 
+
+2.3 防止开机自启动
+重启系统让关闭防火墙生效，使用chkconfig iptables off 重启系统，命令如下：
+
+
+3关闭SELinux
+  执行命令vi  /etc/sysconfig/selinux,修改文件中SELINUX值为disabled
+  
+4 设置静态IP地址
+4.1 修改IP地址
+执行命令vi  /etc/sysconfig/network-scripts/ifcfg-eth0,修改文件中BOOTPROTO状态为static ,增加IPADDR，NETMASK，NETWORK等属性，操作如下：
+
+
+
+4.2 重起网络服务
+执行命令 service network restart重启网络服务，操作命令如下：
+
+5 修改HostName
+5.1 修改主机名
+执行命令vi  /etc/sysconfig/network修改文件中主机名HOSTNAME的值为k1(此值根据具体的环境配置)，操作命令如下：
+
+
+5.2 重启系统主机名生效
+重启系统让主机名生效，使用shutdown -r now 重启系统，命令如下：
+
+6 IP与HostName绑定
+执行命令vi  /etc/hosts , 操作命令如下：
+ 
+
+7 安装JDK
+7.1.Java文件上传
+上传java包至/opt/目录，并解压：tar -zxvf jdk1.7.0_51-64.tar.gz
+
+7.2.Java环境变量配置
+编辑profile文件，并在其尾增加Java环境变量:
+
+vi  /etc/profile
+
+
+添加完成后，退出profile文件，并执行命令:
+source /etc/profile使配置生效
+执行命令java -version,验证判断是否成功:
+
+
+8 创建用户和密码
+创建用户：USERADD KAFKA	
+为新创建的用户设置密码：passwd kafka
+
+9 配置其它的节点
+   按照上面第一步到第八步，配置集群中的其它节点
+10.SSH无密码校验
+10.1.生成公钥/私钥对
+使用命令ssh-keygen  -t  rsa 生成公钥/私钥对，在执行命令行，按回车，在$home/.ssh/目录下，会新生成两个文件：id_rsa.pub和id_rsa,前面是你的公钥，后面是你的私钥
+使用相同的命令在集群的其它节点上面生成生成公钥/私钥对
+（1）使用kafka用户登录：su - kafka
+（2）安装ssh
+[kafka @k1 ~]$ ssh-keygen -t rsa
+
+[kafka @k2 ~]$ ssh-keygen -t rsa
+截图见上图
+[kafka @k3 ~]$ ssh-keygen -t rsa
+截图见上图
+
+（3）设置无秘钥连接
+[kafka @ k1~]$ ssh-copy-id -i /home/kafka/.ssh/id_rsa.pub k1
+
+[kafka @ k1~]$ ssh-copy-id -i /home/kafka/.ssh/id_rsa.pub k2
+截图见上图
+[kafka @ k1~]$ ssh-copy-id -i /home/kafka/.ssh/id_rsa.pub k3
+截图见上图
+
+[kafka @ k2 ~]$ ssh-copy-id -i /home/kafka/.ssh/id_rsa.pub k1
+
+[kafka @ k2 ~]$ ssh-copy-id -i /home/kafka/.ssh/id_rsa.pub k2
+截图见上图
+[kafka @ k2 ~]$ ssh-copy-id -i /home/kafka/.ssh/id_rsa.pub k3
+截图见上图
+
+[kafka @ k3 ~]$ ssh-copy-id -i /home/kafka /.ssh/id_rsa.pub k1
+
+[kafka @ k3 ~]$ ssh-copy-id -i /home/kafka /.ssh/id_rsa.pub k2
+截图见上图
+[kafka @ k3 ~]$ ssh-copy-id -i /home/kafka /.ssh/id_rsa.pub k3
+截图见上图
+
+
+10.2.设置目录和文件权限
+  设置用户目录权限为755或者700，就是不能为777
+  设置.ssh目录权限为755
+  设置id_rsa.pub及authorized_keys权限必须为644
+设置id_rsa权限必须为600
+操作命令如下：
+chmod 755 /home/kafka
+chmod 755 /home/kafka/.ssh
+chmod 644 /home/kafka/.ssh/id_rsa.pub 
+chmod 644 /home/kafka/.ssh/authorized_keys 
+chmod 600 /home/kafka/.ssh/id_rsa
+使用相同的命令在集群的其它节点上面设置目录和文件权限
+
+
+二 zookeeper集群部署
+1确定集群结构
+（1）我们打算在三个节点安装ZK，分别是192.168.8.8(k1)、192.168.8.9(k2)、192.168. 8.10(k3)。首先在k1中部署。
+注意：一定要保证各节点的系统时间相同。
+（2）在需要安装zookeeper的各节点做如下工作：
+	使用root用户进入/opt目录并创建app
+
+	为新建的app目录授予kafka可使用的权限：chown kafka.kafka app -R
+
+
+切换到kafka用户并进入/opt/app目录
+
+2解压缩、设置环境变量
+把zookeeper-3.4.6.tar.gz上传到/opt/app目录下
+
+（1）解压缩：tar -zxvf zookeeper-3.4.6.tar.gz
+
+（2）设置环境变量：vim ~/.bash_profile
+
+注：在各节点都添加上图配置
+（3）环境变量生效：source ~/.bash_profile 
+
+注：在各节点都需要执行这条命令
+（4）验证是否生效
+
+3修改集群的配置
+进入到${ZOOKEEPER_HOME}/conf目录下，将zoo_sample.cfg，重命名为zoo.cfg，并编辑文件
+（1）进入配置文件目录
+
+
+（2）将zoo_sample.cfg重命名为zoo.cfg：mv  zoo_sample.cfg zoo.cfg
+（3）修改zoo.cfg文件配置：vi zoo.cfg
+dataDir属性修改为/opt/app/zookeeper-3.4.6/data。
+在文件的最后增加三行内容，
+server.1=k1:2888:3888
+server.2=k2:2888:3888
+server.3=k3:2888:3888
+修改后结果如下：
+
+注：（1）dataDir：表示数据存放的目录
+	（2）server.1=k1:2888:3888：
+	其中的server是固定名称；1只是一个标记，只要保证与下面的所有标记不重复即可；
+	k1表示主机名，即ZK部署的主机；
+	2888表示ZK之间通信用的端口；
+	3888表示ZK之间选举用的端口。
+（4）检查/opt/app/ zookeeper-3.4.6/data目录是否存在。若不存在则创建；
+	创建命令：mkdir /opt/app/ zookeeper-3.4.6/data
+（5）、创建zookeeper标记
+进入data目录，创建文件myid。myid的内容是该主机名对应的标记数字。如果是节点k1，输入1；如果是节点k2，输入2；如果是节点k3，输入3。
+
+
+4配置其他节点
+（1）在k1节点下，执行命令，把安装文件从k1复制到其他节点，如下：
+scp -rq /opt/app/zookeeper-3.4.6  k2:/opt/app
+scp -rq /opt/app/zookeeper-3.4.6  k3:/opt/app
+
+（2）k2节点下，进入/opt/app/zookeeper-3.4.6/data中，把文件myid的内容修改为2；
+（3）k3节点下，进入/opt/app/zookeeper-3.4.6/data中，把文件myid的内容修改为3。
+
+5启动集群
+在k1、k2、k3节点的终端中，分别执行命令：zkServer.sh  start
+
+6验证
+（1）可以在终端执行jps查看，会看到一个新的java进程QuorumPeerMain。这就是ZK的java进程。
+
+也可以在三个终端分别执行命令
+zkServer.sh  status
+会看到其中一个节点输出信息为Mode: Leader，其他节点输出信息为Mode: Follower。
+节点k1：
+
+节点k2：
+
+节点k3：
+
+三. kafka集群部署
+1上传kafka文件并解压
+（1）把kafka安装包（kafka_2.11-0.10.1.0.tgz）,上传到linux服务器上的/opt/app目录下:
+（2）切换kafka用户 su - kafka
+（3）进入/opt/app目录，解压
+tar -zxvf kafka_2.11-0.10.1.0.tgz
+（4）完成后可删除tar包
+
+2 kafka环境变量设置
+编辑profile文件(vim ~/.bash_profile)，在其尾增加KAFKA_HOME变量:
+
+注：集群其余节点做以上设置
+执行命令source ~/.bash_profile使配置生效
+注：集群其余节点做以上设置
+
+3 kafka配置文件
+3.1. server.properties配置
+执行命令vim /opt/app/kafka_2.11-0.10.1.0/config/server.properties
+
+
+（1）在文件中添加broker.id=1   
+	zookeeper.connect=k1:2181,k2:2181,k3:2181
+（2）把文件传输给k2、 k3机器
+scp -rq /opt/app/kafka_2.11-0.10.1.0 k2:/opt/app
+scp -rq /opt/app/kafka_2.11-0.10.1.0 k3:/opt/app
+（3）k2、k3节点修改文件server.properties：
+vim /opt/app/kafka_2.11-0.10.1.0/config/server.properties
+k2修改为 broker.id=2 
+k3修改为 broker.id=3
+4.启动kafka
+在集群中的这三个节点上分别后台启动Kafka，分别执行如下命令：
+kafka-server-start.sh /opt/app/kafka_2.11-0.10.1.0/config/server.properties &
+
+
+
+
+5.测试kafka集群
+创建一个名称为sdgtopic的Topic，5个分区，并且复制因子为3，执行如下命令：
+kafka-topics.sh -create -zookeeper k1:2181,k2:2181,k3:2181 -replication-factor 3 -partitions 5 -topic sdgtopic
+
+
+查看创建的Topic，执行如下命令：（可以在任意节点上查看，这里在k2）
+kafka-topics.sh -describe -zookeeper k1:2181,k2:2181,k3:2181 -topic sdgtopic
+
+查看所有topic命令
+kafka-topics.sh -describe -zookeeper k1:2181,k2:2181,k3:2181
+
+我们可以通过Kafka自带的bin/kafka-console-producer.sh和bin/kafka-console-consumer.sh脚本，来验证演示如果发布消息、消费消息。
+
+在一个终端，启动Producer，并向我们上面创建的名称为sdgtopic的Topic中生产消息，执行如下脚本，并输入hellow world！！：
+kafka-console-producer.sh -broker-list k1:9092,k2:9092,k3:9092 -topic sdgtopic
+
+
+
+在另一个终端，启动Consumer，并订阅我们上面创建的名称为my-replicated-topic5的Topic中生产的消息，执行如下脚本：
+kafka-console-consumer.sh -zookeeper k1:2181,k2:2181,k3:2181 -from-beginning -topic sdgtopic
+
+
+
+如上图，会出现Producer中输入的内容，这里显示的是：hellow world！！
+四. OGG源端部署
+1、前期准备	
+OOG源端是一台装有oracle数据库的机器 并且不在kafka集群（也可以在kafka集群中），  但是要与kafka集群ip相通，kafka集群ip为192.168.66.131 、192.168.66.132、192.168.66.133
+（1）切换root用户 ：su - root
+	（2）创建目录：mkdir  -p  /opt/app/ogg
+	（3）将app下所有目录、文件授权给oracle：chown -R oracle.oinstall /opt/app/
+
+	（4）切换到oracle用户：su - oracle
+	（5）上传文件，把源端所需文件fbo_ggs_Linux_x64_shiphome.zip上传到目录/opt/app/ ogg
+	（6）进入/opt/app/ogg并且解压缩：unzip fbo_ggs_Linux_x64_shiphome.zip
+2、安装源端OGG
+（1）、修改配置文件，进入目录：cd /opt/app/ogg/fbo_ggs_Linux_x64_shiphome/Disk1/response
+编辑：vim oggcore.rsp
+
+
+注：
+UNIX_GROUP_NAME：属组，安装用户的属组。（可用id命令查看，可不写）
+INVENTORY_LOCATION：有特殊要求看自带的英文注释（可不写）
+START_MANAGER：是否开启manager进程
+SOFTWARE_LOCATION：ogg安装目录(是一个不存在的目录，安装时自动创建)
+INSTALL_OPTION：数据库类型
+（2）进入安装脚本目录：cd  /opt/app/ogg/fbo_ggs_Linux_x64_shiphome/Disk1
+（3）OGG静默安装：./runInstaller -silent -responseFile /opt/app/ogg/fbo_ggs_Linux_x64_shiphome/Disk1/response/oggcore.rsp
+
+表示已经安装成功
+（4）修改环境变量：vim ~/.base_profile
+
+export OGG_HOME=/opt/app/oggl
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$ORACLE_HOME/lib:$OGG_HOME（5）环境变量生效：source  ~/.bash_profile
+ . ~/.profile（这样的更新方式式在AIX系统中使用）
+
+3、数据库配置
+3.1进入源端数据库创建用户并授权
+命令：sqlplus / as sysdba
+
+
+3.1.1进入归档模式 
+shutdown immediate;关闭数据库
+
+
+startup mount; 启动数据库到mount状态
+
+
+	
+
+alter database archivelog;
+
+
+alter database open;
+
+
+CREATE USER ogg IDENTIFIED BY ogg;
+
+
+GRANT CONNECT, RESOURCE, UNLIMITED TABLESPACE TO ogg;
+
+
+GRANT dba TO ogg;
+
+
+EXEC DBMS_GOLDENGATE_AUTH.GRANT_ADMIN_PRIVILEGE (grantee=>'ogg',privilege_type=>'capture',grant_select_privileges=>true,do_
+grants=>TRUE); 
+如果报错
+
+那么可能是数据库版本过低，不用理会，往下继续执行
+
+ALTER DATABASE ADD SUPPLEMENTAL LOG DATA;
+ALTER DATABASE FORCE logging;
+ALTER SYSTEM SWITCH LOGFILE;
+
+（如果是在生产环境下，数据库的配置到里基本就结束了。以下的几行是基于测试环境下进行测试需要执行的几步。）
+create user oggtest identified by oggtest;
+grant dba,connect,resource to oggtest; 
+grant select on v_$session to oggtest;
+
+（如果在生产环境中觉得有必要为同步的表的数据库赋予权限的话，可以执行这两行命令）
+conn oggtest/oggtest
+create table oggtest_user as select * from scott.emp;
+alter table oggtest_user add constraint pk_oggtest primary key(empno);
+
+数据库基本操作语句，不多做解释
+3.2源端OGG参数配置
+
+（1）进入SDG目录cd /opt/app/ogg
+（2）进入SDG程序./ggsci
+
+
+
+（3）执行create subdirs		
+	
+
+3.2.1 管理进程配置
+（1）执行edit param mgr
+写入下列参数
+Port 7909
+purgeoldextracts ./dirdat/* , usecheckpoints
+
+wq保存退出
+
+
+（2）继续执行命令
+dblogin userid ogg ,password ogg
+
+
+
+add trandata oggtest.oggtest_user   [oggtest_user是要同步的表]
+
+
+
+注：若是在输入./ggsci命令后，键入【Backspace】无法删除，出现“^H”，做如下操作:
+（1）vi  ~/.bash_profile
+（2）输入stty erase ^H
+
+（3）source ~/.bash_profile
+3.2.2 定义文件配置
+执行edit param javadef
+输入下列参数
+userid oggtest,password oggtest
+defsfile ./dirdef/empdef.def
+table oggtest.oggtest_user;
+
+wq保存退出
+
+
+3.2.3抽取进程配置
+（1）执行edit param extjms
+输入下列参数
+extract extjms
+userid ogg,password ogg
+exttrail ./dirdat/jw
+table oggtest.oggtest_user;
+
+
+
+
+（2）执行add extract extjms,tranlog,begin now
+（3）执行add Exttrail  ./dirdat/jw,extract extjms,Megabytes 5    
+
+
+
+
+3.2.4 传输进程配置
+（1）执行edit params pxtjms
+输入下列参数
+extract pxtjms
+rmthost 192.168.66.133,mgrport 7909,compress
+rmttrail ./dirdat/je
+passthru
+table oggtest.oggtest_user; 
+
+
+wq保存退出
+
+（2）执行add extract pxtjms,exttrailsource ./dirdat/jw          
+（3）执行add rmttrail ./dirdat/je,extract pxtjms,megabytes 5   
+（在执行第二条命令的时候，trail文件要传输到目标端的某个路径下。两端的路径一样的话可以用点代替，不一样的话得写全路径。如果要用全路径的话，该处和进程中都得写全路径） 
+
+
+
+（4）exit退出OGG程序
+（5）出来执行：./defgen paramfile dirprm/javadef.prm  
+
+
+
+至此，源端安装结束！
+五. OGG目标端部署
+在kafka集群的任意节点上，创建ogg文件：mkdir /opt/app/oggl
+
+1目标端OGG准备
+（1）ggs_Adapters_Linux_x64.zip 到/opt/app/ oggl目录
+（2）进入/opt/app/ oggl目录：cd /opt/app/ oggl
+（2）解压包：
+unzip ggs_Adapters_Linux_x64.zip
+	tar -xvf ggs_Adapters_Linux_x64.tar
+ (5)环境变量配置: vim ~/.bash_profile
+
+export OGG_HOME=/opt/app/oggl
+export LD_LIBRARY_PATH=$JAVA_HOME/jre/lib/amd64:
+$JAVA_HOME/jre/lib/amd64/server:$OGG_HOME
+（6）生效：source  ~/.bash_profile
+
+2配置目标端OGG
+（1）进入安装目录：cd /opt/app/oggl/
+（2）执行./ggsci
+（3）执行create subdirs
+
+
+(4)复制源端dirdef的文件到目标端：
+	1）使用安装ogg的oracle用户，进入源端服务器，
+	2）进入目录：cd  /opt/app/oggl/dirdef
+	3）从源端复制文件到目标端：
+
+	4）检查目标端，看文件是否传输过去
+
+
+（5）进入oggl：cd /opt/app/oggl
+	执行命令:./ggsci
+
+（6）执行命令：edit param mgr 并且粘贴以下内容
+
+Port 7909
+purgeoldextracts ./dirdat/* , usecheckpoints
+wq保存退出
+
+（7）执行edit param RKAFKA
+输入下列参数
+REPLICAT RKAFKA
+TARGETDB LIBFILE libggjava.so SET property=dirprm/kafka.props
+GROUPTRANSOPS 10000
+SOURCEDEFS /opt/app/oggl/dirdef/empdef.def
+MAP oggtest.oggtest_user, TARGET oggtest.oggtest_user;
+
+
+wq保存退出
+
+（8）执行add replicat RKAFKA, exttrail ./dirdat/je
+
+
+3.OGG目标端kafka参数配置
+3.1 kafka.props参数配置
+（1）退出：exit
+
+
+（2）编辑参数文件：vim /opt/app/oggl/dirprm/kafka.props
+把下列参数插入
+gg.handlerlist=kafkahandler
+gg.handler.kafkahandler.type=kafka
+gg.handler.kafkahandler.KafkaProducerConfigFile=custom_kafka_producer.properties
+gg.handler.kafkahandler.TopicName=sdgtopic
+gg.handler.kafkahandler.format=json
+gg.handler.kafkahandler.SchemaTopicName=tpcSchemaTopic
+gg.handler.kafkahandler.BlockingSend=false
+gg.handler.kafkahandler.includeTokens=false
+gg.handler.kafkahandler.mode=tx
+goldengate.userexit.timestamp=utc
+goldengate.userexit.writers=javawriter
+javawriter.stats.display=TRUE
+javawriter.stats.full=TRUE
+gg.log=log4j
+gg.log.level=INFO
+gg.report.time=30sec
+gg.classpath=dirprm/:/opt/app/kafka_2.11-0.10.1.0/libs/*
+javawriter.bootoptions=-Xmx512m -Xms32m -Djava.class.path=ggjava/ggjava.jar
+
+wq保存退出
+
+注：以上各条后边不能有空格，并且要求topic已经存在。如果不存在的话进程启不了。
+
+3.2 custom_kafka_producer.properties参数配置
+（1）编辑参数文件：vim /opt/app/oggl/dirprm/custom_kafka_producer.properties
+
+添加一下内容：
+bootstrap.servers=192.168.66.133:9092
+acks=1
+compression.type=gzip
+reconnect.backoff.ms=1000                                                                      
+value.serializer = org.apache.kafka.common.serialization.ByteArraySerializer
+key.serializer = org.apache.kafka.common.serialization.ByteArraySerializer
+batch.size = 102400
+linger.ms = 10000
+max.request.size = 5024000
+send.buffer.bytes = 5024000
+
+wq保存退出
+
+注：bootstrap.servers的ip可以为其他kafka节点ip
+六.启动
+1源端启动mgr管理进程
+	（1）进入安装目录：cd  /opt/app/ oggl
+	（2）进入sdg控制台：./ggsci
+	（3）开启管理进程：inf
+
+2目标端启动mgr管理进程
+	（1）进入安装目录：cd  /opt/app/oggl
+	（2）进入sdg控制台：./ggsci
+	（3）开启管理进程：start  mgr
+
+
+3源端开启捕捉、发送进程
+	（1）start * （*表示所有进程，也可以用具体进程代替）
+
+	（2）info all (查看进程运行状况running为正常启动)
+
+
+4目标端开启捕捉、发送进程
+
+	（1）start * （*表示所有进程，也可以用具体进程代替）
+
+	（2）info all (查看进程运行状况running为正常启动)
+
+七. 测试
+1.在源端数据库中插入数据
+使用oracle用户登录源端：su  -  oracle 
+登录oracle数据库 sqlplus / as sysdba
+切换到oggtest用户 conn  oggtest/oggtest
+
+insert into oggtest_user(ename,empno) values('zzzz',12); 插入一条数据
+
+
+
+2.在kafka机器中启动程序
+进入KAFKA_HOME/bin目录
+执行kafka-console-consumer.sh -zookeeper host1:2181, host2:2181, host3:2181 -from-beginning -topic oggtest4
+
+可以看到源端oracle中的数据
+
+源端插入两条数据，目标端收到两条数据。
+到此，安装结束。
